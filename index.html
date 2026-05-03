@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>The Period Gazette</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect } = React;
+
+/* ─── Supabase config ───────────────────────────────────────────────── */
+const SUPABASE_URL = "https://dtafzhvxkdclfuilyezl.supabase.co";
+const SUPABASE_KEY = "sb_publishable_7M7ZjlcFnU1ewAb6y2YsCw__UKqCenE";
+const headers = {
+  "Content-Type": "application/json",
+  "apikey": SUPABASE_KEY,
+  "Authorization": `Bearer ${SUPABASE_KEY}`,
+};
+
+async function dbGetArticles() {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/articles?order=created_at.desc`, { headers });
+  if (!r.ok) throw new Error("Failed to fetch articles");
+  return r.json();
+}
+
+async function dbInsertArticle(article) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/articles`, {
+    method: "POST",
+    headers: { ...headers, "Prefer": "return=representation" },
+    body: JSON.stringify(article),
+  });
+  if (!r.ok) throw new Error("Failed to insert article");
+  return r.json();
+}
+
+async function dbDeleteArticle(id) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/articles?id=eq.${id}`, {
+    method: "DELETE", headers,
+  });
+  if (!r.ok) throw new Error("Failed to delete article");
+}
+
+async function dbGetSubscribers() {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/subscribers?order=created_at.desc`, { headers });
+  if (!r.ok) throw new Error("Failed to fetch subscribers");
+  return r.json();
+}
+
+async function dbInsertSubscriber(sub) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/subscribers`, {
+    method: "POST",
+    headers: { ...headers, "Prefer": "return=representation" },
+    body: JSON.stringify(sub),
+  });
+  if (r.status === 409) throw new Error("already_subscribed");
+  if (!r.ok) throw new Error("Failed to subscribe");
+  return r.json();
+}
+
+async function dbDeleteSubscriber(id) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/subscribers?id=eq.${id}`, {
+    method: "DELETE", headers,
+  });
+  if (!r.ok) throw new Error("Failed to delete subscriber");
+}
+
+/* ─── fonts + resets ───────────────────────────────────────────────── */
+const GLOBAL_CSS = `
+  @import url('https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap');
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #080808; color: #fff; font-family: 'Libre Baskerville', Georgia, serif; overflow-x: hidden; }
+  ::selection { background: #fff; color: #000; }
+  button { font-family: 'Libre Baskerville', Georgia, serif; cursor: pointer; }
+  input, textarea, select {
+    font-family: 'Libre Baskerville', Georgia, serif;
+    background: #111; border: 1px solid #252525; color: #fff;
+    border-radius: 0; outline: none; font-size: 14px; padding: 10px 12px; width: 100%;
+  }
+  input:focus, textarea:focus, select:focus { border-color: #fff; }
+  input::placeholder, textarea::placeholder { color: #3a3a3a; }
+  option { background: #111; color: #fff; }
+  .fade-in { animation: fadeIn 0.4s ease both; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  .ticker-wrap { overflow: hidden; white-space: nowrap; width: 100%; }
+  .ticker-inner { display: inline-block; animation: ticker 30s linear infinite; }
+  @keyframes ticker { from { transform:translateX(100vw); } to { transform:translateX(-100%); } }
+  .nav-scroll { display:flex; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+  .nav-scroll::-webkit-scrollbar { display:none; }
+  .drop-zone {
+    border: 2px dashed #252525; background: #111; padding: 28px 16px;
+    text-align: center; cursor: pointer; position: relative; transition: border-color 0.2s;
+  }
+  .drop-zone:hover { border-color: #fff; }
+  .drop-zone input[type=file] {
+    position:absolute; inset:0; opacity:0; cursor:pointer;
+    width:100%; height:100%; border:none; padding:0; background:none;
+  }
+`;
+
+/* ─── helpers ───────────────────────────────────────────────────────── */
+const getSection = cat => ["Column","Feature"].includes(cat) ? "Prose" : "Metered";
+
+function useContainerWidth() {
+  const [w, setW] = useState(360);
+  useEffect(() => {
+    const el = document.getElementById("tpg-root") || document.body;
+    setW(el.getBoundingClientRect().width || window.innerWidth);
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setW(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return w;
+}
+
+/* ─── design tokens ─────────────────────────────────────────────────── */
+const T = {
+  bg:"#080808", surface:"#111", border:"#252525", border2:"#3a3a3a",
+  white:"#fff", dim:"#666", accent:"#c8a96e",
+  serif:"'IM Fell English', Georgia, serif",
+  body:"'Libre Baskerville', Georgia, serif",
+};
+const lbl = { display:"block", fontSize:10, fontWeight:700,
+  letterSpacing:"0.14em", textTransform:"uppercase", color:T.dim, marginBottom:6 };
+
+/* ─── Badge ─────────────────────────────────────────────────────────── */
+function Badge({ category, small }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
+      <span style={{ fontSize:small?7:9, letterSpacing:"0.18em", textTransform:"uppercase",
+        fontWeight:700, color:"#000", background:T.accent, padding:"2px 6px" }}>
+        {getSection(category)}
+      </span>
+      <span style={{ fontSize:small?7:9, letterSpacing:"0.14em", textTransform:"uppercase",
+        color:T.dim, fontWeight:700 }}>{category}</span>
+    </div>
+  );
+}
+
+/* ─── SectionHead ────────────────────────────────────────────────────── */
+function SectionHead({ label }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:10,
+      borderTop:`3px solid ${T.white}`, paddingTop:7, marginBottom:14 }}>
+      <span style={{ fontSize:10, letterSpacing:"0.2em", textTransform:"uppercase",
+        fontWeight:700, color:T.white, fontFamily:T.body, whiteSpace:"nowrap" }}>{label}</span>
+      <div style={{ flex:1, height:1, background:T.border2 }} />
+    </div>
+  );
+}
+
+/* ─── PhotoUpload ────────────────────────────────────────────────────── */
+function PhotoUpload({ value, onChange }) {
+  const [drag, setDrag] = useState(false);
+  function processFile(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const MAX=1200; let {width:w,height:h}=img;
+      if (w>MAX){h=Math.round(h*MAX/w);w=MAX;}
+      const c=document.createElement("canvas"); c.width=w; c.height=h;
+      c.getContext("2d").drawImage(img,0,0,w,h);
+      onChange(c.toDataURL("image/jpeg",0.82)); URL.revokeObjectURL(url);
+    }; img.src=url;
+  }
+  return (
+    <div>
+      <label style={lbl}>Cover Photo <span style={{color:T.dim,fontWeight:400}}>(optional)</span></label>
+      {value ? (
+        <div style={{position:"relative"}}>
+          <img src={value} alt="Preview"
+            style={{width:"100%",height:180,objectFit:"cover",display:"block",
+              filter:"grayscale(30%)",border:`1px solid ${T.border}`}}/>
+          <button onClick={()=>onChange("")} style={{position:"absolute",top:8,right:8,
+            background:"rgba(0,0,0,0.85)",color:"#fff",border:"1px solid #333",
+            fontSize:10,padding:"5px 11px",letterSpacing:"0.1em",
+            textTransform:"uppercase",fontWeight:700}}>Remove</button>
+        </div>
+      ) : (
+        <div className={"drop-zone"+(drag?" drag-over":"")}
+          onDragOver={e=>{e.preventDefault();setDrag(true);}}
+          onDragLeave={()=>setDrag(false)}
+          onDrop={e=>{e.preventDefault();setDrag(false);processFile(e.dataTransfer.files[0]);}}>
+          <input type="file" accept="image/*" onChange={e=>processFile(e.target.files[0])}/>
+          <div style={{pointerEvents:"none"}}>
+            <div style={{fontSize:24,marginBottom:8}}>📷</div>
+            <p style={{fontSize:13,color:T.dim}}>Tap to choose a photo</p>
+            <p style={{fontSize:10,color:"#333",marginTop:4}}>JPG · PNG · WEBP</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── ArticleView ────────────────────────────────────────────────────── */
+function ArticleView({ article, onBack, mobile }) {
+  const isMetered = getSection(article.category) === "Metered";
+  const blocks = article.body.split(/\n\n+/);
+  const pad = mobile ? 12 : 16;
+  return (
+    <div className="fade-in"
+      style={{maxWidth:720, margin:"0 auto", padding:`0 ${pad}px 60px`, width:"100%"}}>
+      <button onClick={onBack} style={{background:"none",border:"none",fontSize:11,
+        color:T.dim,letterSpacing:"0.14em",textTransform:"uppercase",
+        fontWeight:700,padding:"14px 0",display:"block"}}>← Back</button>
+      {article.cover && (
+        <div style={{margin:`0 -${pad}px`,marginBottom:20}}>
+          <img src={article.cover} alt={article.title}
+            style={{width:"100%",maxHeight:mobile?190:320,objectFit:"cover",
+              display:"block",filter:"grayscale(100%) contrast(1.1)"}}/>
+        </div>
+      )}
+      <div style={{borderTop:`3px solid ${T.white}`,paddingTop:14,marginBottom:16}}>
+        <Badge category={article.category}/>
+        <h1 style={{fontFamily:T.serif,fontSize:mobile?20:28,lineHeight:1.2,
+          margin:"10px 0 10px",color:T.white}}>{article.title}</h1>
+        {article.excerpt && (
+          <p style={{fontSize:14,color:T.dim,fontStyle:"italic",lineHeight:1.7,
+            marginBottom:12,borderLeft:`3px solid ${T.accent}`,paddingLeft:12}}>
+            {article.excerpt}
+          </p>
+        )}
+        <p style={{fontSize:11,color:T.dim,letterSpacing:"0.08em"}}>
+          By <strong style={{color:T.white}}>{article.author}</strong>
+          &ensp;·&ensp;{article.date}
+        </p>
+      </div>
+      <div style={{height:1,
+        background:`linear-gradient(to right,transparent,${T.white} 20%,${T.white} 80%,transparent)`,
+        marginBottom:24}}/>
+      <div>
+        {blocks.map((block,i) => isMetered ? (
+          <div key={i} style={{fontFamily:T.serif,fontSize:16,lineHeight:2.1,
+            fontStyle:"italic",color:T.white,marginBottom:"2em",whiteSpace:"pre-line"}}>
+            {block.trim()}
+          </div>
+        ) : (
+          <p key={i} style={{fontFamily:T.body,fontSize:mobile?14:15,
+            lineHeight:1.95,color:"#ccc",marginBottom:"1.5em"}}>
+            {block.trim()}
+          </p>
+        ))}
+      </div>
+      <div style={{textAlign:"center",marginTop:36,paddingTop:16,
+        borderTop:`1px solid ${T.border}`}}>
+        <span style={{color:T.dim,fontSize:20,letterSpacing:"0.3em"}}>· · ·</span>
+      </div>
+    </div>
+  );
+}
+
+/* ─── AdminPanel ─────────────────────────────────────────────────────── */
+function AdminPanel({ articles, setArticles, onClose }) {
+  const [tab, setTab]   = useState("new");
+  const [form, setForm] = useState({title:"",category:"Column",author:"",excerpt:"",body:"",cover:""});
+  const [subs, setSubs] = useState([]);
+  const [saving, setSaving]   = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [toast, setToast]     = useState("");
+  const [error, setError]     = useState("");
+
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  useEffect(() => {
+    if (tab === "subs") {
+      setLoading(true);
+      dbGetSubscribers()
+        .then(setSubs)
+        .catch(() => setError("Could not load subscribers."))
+        .finally(() => setLoading(false));
+    }
+  }, [tab]);
+
+  function showToast(msg) {
+    setToast(msg); setTimeout(() => setToast(""), 2800);
+  }
+
+  async function publish() {
+    if (!form.title.trim() || !form.body.trim() || !form.author.trim()) {
+      alert("Title, author, and body are required."); return;
+    }
+    setSaving(true); setError("");
+    try {
+      const payload = {
+        title: form.title.trim(),
+        author: form.author.trim(),
+        category: form.category,
+        excerpt: form.excerpt.trim(),
+        body: form.body.trim(),
+        cover: form.cover,
+        featured: false,
+        date: new Date().toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"}),
+      };
+      const [inserted] = await dbInsertArticle(payload);
+      const updated = [inserted, ...articles];
+      setArticles(updated);
+      setForm({title:"",category:"Column",author:"",excerpt:"",body:"",cover:""});
+      setTab("archive");
+      showToast("✦ Published.");
+    } catch(e) {
+      setError("Failed to publish. Check your connection.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function del(id) {
+    if (!confirm("Delete this piece?")) return;
+    try {
+      await dbDeleteArticle(id);
+      setArticles(prev => prev.filter(a => a.id !== id));
+      showToast("Deleted.");
+    } catch {
+      setError("Failed to delete.");
+    }
+  }
+
+  async function removeSub(id) {
+    try {
+      await dbDeleteSubscriber(id);
+      setSubs(prev => prev.filter(s => s.id !== id));
+      showToast("Removed.");
+    } catch {
+      setError("Failed to remove subscriber.");
+    }
+  }
+
+  const tabBtn = (t, label) => (
+    <button onClick={()=>setTab(t)} style={{background:"none",border:"none",padding:"10px 12px",
+      fontSize:10,fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",
+      color:tab===t?T.white:T.dim,
+      borderBottom:tab===t?`2px solid ${T.accent}`:"2px solid transparent"}}>{label}</button>
+  );
+
+  return (
+    <div style={{position:"fixed",inset:0,background:T.bg,zIndex:200,overflowY:"auto"}}>
+      {toast && (
+        <div style={{position:"fixed",top:16,left:"50%",transform:"translateX(-50%)",
+          background:T.accent,color:"#000",padding:"9px 18px",fontSize:11,
+          fontWeight:700,letterSpacing:"0.1em",zIndex:400,whiteSpace:"nowrap",
+          boxShadow:"0 4px 20px rgba(0,0,0,0.5)"}}>
+          {toast}
+        </div>
+      )}
+      <div style={{maxWidth:600,margin:"0 auto",padding:"20px 16px 80px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <span style={{fontFamily:T.serif,fontSize:20,color:T.white}}>Editor's Desk</span>
+          <button onClick={onClose} style={{background:"none",border:"none",fontSize:26,color:T.dim}}>×</button>
+        </div>
+        <div style={{height:1,background:T.border,marginBottom:0}}/>
+        {error && (
+          <div style={{background:"#1a0000",border:"1px solid #f55",color:"#f88",
+            fontSize:12,padding:"10px 14px",margin:"12px 0"}}>
+            {error}
+          </div>
+        )}
+        <div style={{display:"flex",borderBottom:`1px solid ${T.border}`,marginBottom:24}}>
+          {tabBtn("new","New Piece")}
+          {tabBtn("archive","Archive")}
+          {tabBtn("subs","Subscribers")}
+        </div>
+
+        {tab==="new" && (
+          <div style={{display:"grid",gap:16}}>
+            <div>
+              <label style={lbl}>Title *</label>
+              <input value={form.title} onChange={e=>set("title",e.target.value)} placeholder="Piece title"/>
+            </div>
+            <div>
+              <label style={lbl}>Author *</label>
+              <input value={form.author} onChange={e=>set("author",e.target.value)} placeholder="Author name"/>
+            </div>
+            <div>
+              <label style={lbl}>Category *</label>
+              <select value={form.category} onChange={e=>set("category",e.target.value)}>
+                <optgroup label="Prose"><option>Column</option><option>Feature</option></optgroup>
+                <optgroup label="Metered"><option>Narratives</option><option>Resonants</option></optgroup>
+              </select>
+            </div>
+            <PhotoUpload value={form.cover} onChange={v=>set("cover",v)}/>
+            <div>
+              <label style={lbl}>Excerpt <span style={{fontWeight:400}}>(optional)</span></label>
+              <textarea value={form.excerpt} onChange={e=>set("excerpt",e.target.value)}
+                placeholder="A line or two..." rows={2} style={{resize:"vertical"}}/>
+            </div>
+            <div>
+              <label style={lbl}>Body *</label>
+              <textarea value={form.body} onChange={e=>set("body",e.target.value)}
+                placeholder="Separate paragraphs or stanzas with a blank line."
+                rows={12} style={{resize:"vertical",lineHeight:1.8}}/>
+            </div>
+            <button onClick={publish} disabled={saving} style={{
+              background: saving ? T.border2 : T.accent,
+              color: saving ? T.dim : "#000",
+              border:"none", padding:14, fontWeight:700, fontSize:12,
+              letterSpacing:"0.12em", textTransform:"uppercase",
+              transition:"background 0.2s", cursor: saving ? "default" : "pointer",
+            }}>
+              {saving ? "Publishing…" : "Publish"}
+            </button>
+          </div>
+        )}
+
+        {tab==="archive" && (
+          <div>
+            {articles.length===0 && (
+              <p style={{color:T.dim,fontSize:13,fontStyle:"italic"}}>No pieces yet.</p>
+            )}
+            {articles.map(a=>(
+              <div key={a.id} style={{display:"grid",
+                gridTemplateColumns:a.cover?"52px 1fr auto":"1fr auto",
+                gap:12,alignItems:"center",
+                borderBottom:`1px solid ${T.border}`,paddingBottom:14,marginBottom:14}}>
+                {a.cover && (
+                  <img src={a.cover} alt="" style={{width:52,height:52,objectFit:"cover",filter:"grayscale(100%)"}}/>
+                )}
+                <div>
+                  <p style={{fontFamily:T.serif,fontSize:14,marginBottom:2,color:T.white}}>{a.title}</p>
+                  <p style={{fontSize:10,color:T.dim,letterSpacing:"0.06em"}}>{a.author} · {a.category} · {a.date}</p>
+                </div>
+                <button onClick={()=>del(a.id)} style={{background:"none",border:`1px solid ${T.border}`,
+                  color:"#f55",fontSize:10,padding:"4px 10px",letterSpacing:"0.08em",
+                  textTransform:"uppercase",fontWeight:700}}>Delete</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab==="subs" && (
+          <div>
+            {loading && <p style={{color:T.dim,fontSize:13,fontStyle:"italic"}}>Loading…</p>}
+            {!loading && subs.length===0 && (
+              <p style={{color:T.dim,fontSize:13,fontStyle:"italic"}}>No subscribers yet.</p>
+            )}
+            {subs.map(s=>(
+              <div key={s.id} style={{fontSize:13,color:T.white,
+                borderBottom:`1px solid ${T.border}`,padding:"10px 0",
+                display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                <span style={{wordBreak:"break-all"}}>{s.email}</span>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                  <span style={{fontSize:11,color:T.dim,whiteSpace:"nowrap"}}>{s.date}</span>
+                  <button onClick={()=>removeSub(s.id)} style={{background:"none",
+                    border:`1px solid ${T.border}`,color:"#f55",fontSize:10,
+                    padding:"3px 8px",letterSpacing:"0.08em",textTransform:"uppercase",fontWeight:700}}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── App ────────────────────────────────────────────────────────────── */
+function App() {
+  const [articles, setArticles]     = useState([]);
+  const [loaded, setLoaded]         = useState(false);
+  const [loadError, setLoadError]   = useState(false);
+  const [view, setView]             = useState("home");
+  const [selected, setSelected]     = useState(null);
+  const [filterCat, setFilterCat]   = useState(null);
+  const [email, setEmail]           = useState("");
+  const [subscribed, setSubscribed] = useState(false);
+  const [subError, setSubError]     = useState("");
+  const [adminOpen, setAdminOpen]   = useState(false);
+  const [passPrompt, setPassPrompt] = useState(false);
+  const [pass, setPass]             = useState("");
+
+  const w       = useContainerWidth();
+  const mobile  = w < 600;
+  const desktop = w >= 900;
+  const pad     = mobile ? 12 : 20;
+
+  useEffect(() => {
+    const el = document.createElement("style");
+    el.textContent = GLOBAL_CSS;
+    document.head.appendChild(el);
+    return () => document.head.removeChild(el);
+  }, []);
+
+  useEffect(() => {
+    dbGetArticles()
+      .then(data => { setArticles(data); setLoaded(true); })
+      .catch(() => { setLoadError(true); setLoaded(true); });
+  }, []);
+
+  const open   = a  => { setSelected(a); setView("article"); window.scrollTo(0,0); };
+  const goHome = () => { setSelected(null); setView("home"); };
+
+  const filtered  = articles.filter(a => filterCat ? a.category===filterCat : true);
+  const hero      = filtered[0];
+  const secondary = filtered.slice(1,3);
+  const gridRest  = filtered.slice(3);
+
+  async function subscribe() {
+    setSubError("");
+    if (!email.includes("@")) { setSubError("Please enter a valid email."); return; }
+    try {
+      await dbInsertSubscriber({
+        email,
+        date: new Date().toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"}),
+      });
+      setSubscribed(true);
+    } catch(e) {
+      if (e.message === "already_subscribed") setSubError("Already subscribed.");
+      else setSubError("Something went wrong. Try again.");
+    }
+  }
+
+  function tryAdmin() {
+    if (pass === "REGLA0213") { setAdminOpen(true); setPassPrompt(false); setPass(""); }
+    else alert("Incorrect password.");
+  }
+
+  const shortDate = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+  const longDate  = new Date().toLocaleDateString("en-US",{weekday:"long",year:"numeric",month:"long",day:"numeric"});
+
+  if (!loaded) {
+    return (
+      <div style={{minHeight:"100vh",background:T.bg,display:"flex",
+        alignItems:"center",justifyContent:"center"}}>
+        <span style={{fontFamily:T.serif,fontSize:16,color:T.dim,
+          letterSpacing:"0.2em",fontStyle:"italic"}}>Loading…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div id="tpg-root" style={{minHeight:"100vh",background:T.bg,overflowX:"hidden",width:"100%"}}>
+
+      {/* ── TICKER ── */}
+      <div style={{background:"#111",borderBottom:`1px solid ${T.border}`,
+        padding:"5px 0",overflow:"hidden",width:"100%"}}>
+        <div className="ticker-wrap">
+          <span className="ticker-inner"
+            style={{fontSize:10,color:T.accent,letterSpacing:"0.1em",textTransform:"uppercase"}}>
+            {articles.length > 0
+              ? articles.slice(0,8).map(a => <span key={a.id}>✦ {a.title}&ensp;·&ensp;</span>)
+              : <span>✦ The Period Gazette &ensp;·&ensp; Voice that Writes &ensp;·&ensp;</span>
+            }
+          </span>
+        </div>
+      </div>
+
+      {/* ── MASTHEAD ── */}
+      <header style={{background:T.bg,borderBottom:`3px double ${T.white}`,width:"100%"}}>
+        <div style={{borderBottom:`1px solid ${T.border}`,padding:`6px ${pad}px`,
+          display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,minWidth:0}}>
+          <span style={{fontSize:9,letterSpacing:"0.07em",color:T.dim,fontStyle:"italic",
+            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0,flex:1}}>
+            {mobile ? shortDate : longDate}
+          </span>
+          <button onClick={()=>setPassPrompt(true)} style={{background:"none",
+            border:`1px solid ${T.border}`,fontSize:9,letterSpacing:"0.12em",
+            textTransform:"uppercase",color:T.dim,padding:"3px 10px",flexShrink:0}}>
+            Editor
+          </button>
+        </div>
+
+        <div onClick={goHome} style={{textAlign:"center",
+          padding:`${mobile?10:16}px ${pad}px ${mobile?8:10}px`,
+          cursor:"pointer",borderBottom:`1px solid ${T.border}`}}>
+          <div style={{fontSize:8,letterSpacing:"0.26em",textTransform:"uppercase",
+            color:T.dim,marginBottom:5}}>Literary &amp; Opinion</div>
+          <h1 style={{fontFamily:T.serif,
+            fontSize: mobile ? 24 : desktop ? 50 : 36,
+            fontWeight:400,letterSpacing:"0.02em",color:T.white,lineHeight:1}}>
+            The Period Gazette
+          </h1>
+          <p style={{fontSize:8,letterSpacing:"0.22em",textTransform:"uppercase",
+            color:T.accent,marginTop:7}}>
+            Est. 2026 &nbsp;·&nbsp; Voice that Writes
+          </p>
+        </div>
+
+        <nav className="nav-scroll" style={{width:"100%"}}>
+          {[null,"Column","Feature","Narratives","Resonants"].map(cat => {
+            const label = cat===null ? "All" : cat;
+            const active = filterCat===cat;
+            return (
+              <button key={label} onClick={()=>{setFilterCat(cat);goHome();}}
+                style={{
+                  flexShrink:0, background:active?T.white:"transparent",
+                  color:active?"#000":T.dim, border:"none",
+                  borderRight:`1px solid ${T.border}`,
+                  fontSize:mobile?9:10, fontWeight:700,
+                  letterSpacing:mobile?"0.08em":"0.13em",
+                  textTransform:"uppercase",
+                  padding:mobile?"8px 13px":"9px 18px",
+                  whiteSpace:"nowrap", transition:"background 0.15s,color 0.15s",
+                }}>{label}</button>
+            );
+          })}
+        </nav>
+      </header>
+
+      {/* ── CONTENT ── */}
+      {view==="article" && selected ? (
+        <ArticleView article={selected} onBack={goHome} mobile={mobile}/>
+      ) : (
+        <main style={{maxWidth:1080,margin:"0 auto",
+          padding:`${mobile?12:24}px ${pad}px 60px`,width:"100%"}}>
+
+          {loadError && (
+            <div style={{textAlign:"center",marginTop:48}}>
+              <p style={{color:"#f88",fontSize:13,marginBottom:8}}>
+                Could not connect to the database.
+              </p>
+              <p style={{color:T.dim,fontSize:12}}>Check your Supabase connection and refresh.</p>
+            </div>
+          )}
+
+          {!loadError && filtered.length===0 && (
+            <p style={{color:T.dim,textAlign:"center",fontStyle:"italic",marginTop:48}}>
+              {filterCat ? "No pieces in this category yet." : "No pieces published yet."}
+            </p>
+          )}
+
+          {/* ── HERO ── */}
+          {hero && (
+            <div className="fade-in" style={{marginBottom:24}}>
+              <SectionHead label="Front Page"/>
+              <div style={{
+                display:"grid",
+                gridTemplateColumns: desktop && secondary.length ? "1fr 260px" : "1fr",
+                gap:0, borderBottom:`1px solid ${T.border}`, paddingBottom:20,
+              }}>
+                <div onClick={()=>open(hero)} style={{cursor:"pointer",
+                  paddingRight: desktop&&secondary.length ? 20 : 0,
+                  borderRight: desktop&&secondary.length ? `1px solid ${T.border}` : "none"}}>
+                  {hero.cover && (
+                    <img src={hero.cover} alt={hero.title} style={{
+                      width:"100%", height: mobile?180:desktop?290:230,
+                      objectFit:"cover", display:"block",
+                      filter:"grayscale(100%) contrast(1.08)", marginBottom:12,
+                    }}/>
+                  )}
+                  <Badge category={hero.category}/>
+                  <h2 style={{fontFamily:T.serif,
+                    fontSize: mobile?20:desktop?28:24,
+                    lineHeight:1.2, color:T.white, margin:"8px 0 10px"}}>
+                    {hero.title}
+                  </h2>
+                  {hero.excerpt && (
+                    <p style={{fontSize:mobile?13:14,color:T.dim,lineHeight:1.75,
+                      fontStyle:"italic",marginBottom:10}}>{hero.excerpt}</p>
+                  )}
+                  <span style={{fontSize:10,color:T.dim,letterSpacing:"0.07em"}}>
+                    By {hero.author} · {hero.date}
+                  </span>
+                </div>
+
+                {secondary.length>0 && (
+                  <div style={{
+                    paddingLeft: desktop?20:0, paddingTop: desktop?0:16,
+                    marginTop: desktop?0:16,
+                    borderTop: desktop?"none":`1px solid ${T.border}`,
+                    display:"grid",
+                    gridTemplateColumns: desktop?"1fr":mobile?"1fr":"1fr 1fr",
+                    gap:16,
+                  }}>
+                    {secondary.map(a => (
+                      <div key={a.id} onClick={()=>open(a)} style={{cursor:"pointer"}}>
+                        {a.cover && (
+                          <img src={a.cover} alt={a.title} style={{
+                            width:"100%", height:mobile?100:110,
+                            objectFit:"cover", display:"block",
+                            filter:"grayscale(100%) contrast(1.05)", marginBottom:8,
+                          }}/>
+                        )}
+                        <Badge category={a.category} small/>
+                        <h3 style={{fontFamily:T.serif, fontSize:mobile?13:14,
+                          lineHeight:1.3, color:T.white, margin:"5px 0 5px"}}>
+                          {a.title}
+                        </h3>
+                        <span style={{fontSize:9,color:T.dim}}>By {a.author} · {a.date}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── MORE PIECES ── */}
+          {gridRest.length>0 && (
+            <div className="fade-in">
+              <SectionHead label="More Pieces"/>
+              <div style={{
+                display:"grid",
+                gridTemplateColumns: desktop?"1fr 1fr 1fr":mobile?"1fr":"1fr 1fr",
+              }}>
+                {gridRest.map((a,i) => {
+                  const cols = desktop?3:mobile?1:2;
+                  const col  = i % cols;
+                  const isLastCol = col === cols-1;
+                  return (
+                    <div key={a.id} onClick={()=>open(a)} style={{
+                      cursor:"pointer",
+                      display:"grid",
+                      gridTemplateColumns: a.cover?"60px 1fr":"1fr",
+                      gap:10, alignItems:"start",
+                      padding:"12px 0",
+                      paddingRight: !isLastCol?16:0,
+                      marginRight: !isLastCol?16:0,
+                      borderRight: !isLastCol?`1px solid ${T.border}`:"none",
+                      borderBottom: i<gridRest.length-cols?`1px solid ${T.border}`:"none",
+                    }}>
+                      {a.cover && (
+                        <img src={a.cover} alt={a.title}
+                          style={{width:60,height:60,objectFit:"cover",
+                            filter:"grayscale(100%) contrast(1.05)",flexShrink:0}}/>
+                      )}
+                      <div>
+                        <Badge category={a.category} small/>
+                        <h4 style={{fontFamily:T.serif,fontSize:13,lineHeight:1.35,
+                          color:T.white,margin:"4px 0 5px"}}>{a.title}</h4>
+                        <span style={{fontSize:9,color:T.dim,letterSpacing:"0.05em"}}>
+                          {a.author} · {a.date}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── SUBSCRIBE ── */}
+          <div style={{borderTop:`3px double ${T.white}`,borderBottom:`3px double ${T.white}`,
+            padding:"22px 0",marginTop:36,textAlign:"center"}}>
+            <p style={{fontFamily:T.serif,fontSize:17,marginBottom:4,color:T.white}}>
+              The Periodical Gazette
+            </p>
+            <p style={{fontSize:12,color:T.dim,marginBottom:16,fontStyle:"italic"}}>
+              Deliver voices when they matter.
+            </p>
+            {subscribed ? (
+              <p style={{color:T.accent,fontWeight:700,fontSize:13,letterSpacing:"0.06em"}}>
+                ✦ You are on the list.
+              </p>
+            ) : (
+              <>
+                <div style={{display:"flex",flexDirection:mobile?"column":"row",
+                  maxWidth:400,margin:"0 auto",gap:mobile?8:0}}>
+                  <input type="email" placeholder="your@email.com" value={email}
+                    onChange={e=>setEmail(e.target.value)}
+                    onKeyDown={e=>e.key==="Enter"&&subscribe()}
+                    style={{flex:1,borderRight:mobile?"1px solid #252525":"none"}}/>
+                  <button onClick={subscribe} style={{
+                    background:T.accent,color:"#000",border:`1px solid ${T.accent}`,
+                    padding:"10px 16px",fontSize:10,fontWeight:700,
+                    letterSpacing:"0.12em",textTransform:"uppercase",whiteSpace:"nowrap",
+                  }}>Subscribe</button>
+                </div>
+                {subError && (
+                  <p style={{color:"#f88",fontSize:12,marginTop:8}}>{subError}</p>
+                )}
+              </>
+            )}
+          </div>
+        </main>
+      )}
+
+      {/* ── FOOTER ── */}
+      <footer style={{borderTop:`1px solid ${T.border}`,padding:`14px ${pad}px`,textAlign:"center"}}>
+        <p style={{fontFamily:T.serif,fontSize:12,color:T.dim,fontStyle:"italic"}}>
+          The Period Gazette &nbsp;·&nbsp; Est. 2026
+        </p>
+      </footer>
+
+      {/* ── PASSWORD MODAL ── */}
+      {passPrompt && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",
+          display:"flex",alignItems:"center",justifyContent:"center",zIndex:300,padding:16}}>
+          <div style={{background:T.bg,padding:24,width:"100%",maxWidth:300,
+            border:`1px solid ${T.white}`}}>
+            <p style={{fontFamily:T.serif,fontSize:16,marginBottom:14,color:T.white}}>
+              Editor's Access
+            </p>
+            <input type="password" placeholder="Password" value={pass}
+              onChange={e=>setPass(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&tryAdmin()}
+              style={{marginBottom:12}}/>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={tryAdmin} style={{flex:1,background:T.accent,color:"#000",
+                border:"none",padding:10,fontWeight:700,fontSize:11,letterSpacing:"0.1em"}}>
+                Enter
+              </button>
+              <button onClick={()=>{setPassPrompt(false);setPass("");}}
+                style={{flex:1,background:"transparent",color:T.dim,
+                  border:`1px solid ${T.border}`,padding:10,fontSize:11}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {adminOpen && (
+        <AdminPanel articles={articles} setArticles={setArticles}
+          onClose={()=>setAdminOpen(false)}/>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+  </script>
+</body>
+</html>
