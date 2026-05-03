@@ -237,8 +237,8 @@ function ArticleView({ article, onBack, mobile }) {
         marginBottom:24}}/>
       <div>
         {blocks.map((block,i) => isMetered ? (
-          <div key={i} style={{fontFamily:T.serif,fontSize:16,lineHeight:2.1,
-            fontStyle:"italic",color:T.white,marginBottom:"2em",whiteSpace:"pre-line"}}>
+          <div key={i} style={{fontFamily:"'Libre Baskerville', 'Times New Roman', Times, serif",fontSize:16,lineHeight:2.1,
+            color:T.white,marginBottom:"2em",whiteSpace:"pre-line"}}>
             {block.trim()}
           </div>
         ) : (
